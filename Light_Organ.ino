@@ -1,32 +1,31 @@
 /*Light Organ\Fun Project written by Marcus Mesta for the MSP4302553 TI microcontroller. */
 
+void updateData(void);      //gather data and store it into spectrumValue
+void resetDevice(void);     //reset the bandpass device
+void filter(void);          //filter out data by comparing to calculated offset. Zeros values not greater than initial threshold calculation on boot.
+void lightAction(void);     //controls light display
+void runMain(void);         //Main program control flow
+void normalize(void);       //On boot set threshold limit 
+void goodSignal(void);      //Pulse lights to indicate normalization is over
+void setThreshold(void); //Set threshold OTG sound must break an average threshold in order to light each channel LED
+void setupDevices(void);    //setup bandpass device. Reboot, normalize device
+
 const unsigned short int analogPin = 6;
 const unsigned short int strobePin = 7;
 const unsigned short int resetPin = 8;
 
-const unsigned short int ledred = 14;
-const unsigned short int ledblue = 13;
-const unsigned short int ledgreen = 12;
-
 const unsigned short int switchPin = 2;
 const unsigned short int channelWidth = 7;
+const unsigned short int lightArray[7] = {4,9,10,12,13,14,19}; //Pins supporting PWM
 
-unsigned int spectrumValue[channelWidth] = {0,0,0,0,0,0,0};
-unsigned int offset[channelWidth] = {0,0,0,0,0,0,0};
- 
-void updateData(void);   //gather data and store it into spectrumValue
-void resetDevice(void);  //reset the bandpass device
-void filter(void);       //filter out data by comparing to calculated offset
-void lightAction(void);  //controls light display
-void runMain(void);      //Main program control flow
-void normalize(void);    //On boot set threshold limit 
-void goodSignal(void);   //Pulse lights to indicate normalization is over
-void setAvgThreshold(void); //Set threshold OTG sound must break an average threshold in order to light each channel LED
-
-
+unsigned int spectrumValue[channelWidth] = {0,0,0,0,0,0,0};  //array that gets written to LEDs 
+unsigned int offset[channelWidth] = {0,0,0,0,0,0,0};         //stores values of first boot noise levels
+unsigned int avgLevel[channelWidth] = {0,0,0,0,0,0,0};       //stores average channel values. Is updated every x cycles
 unsigned int runCount = 0; //keep track of runs, so that averages can be taken every x times.
+unsigned int runTimes = 5; //How many samples till re-averaging
 
 void setup(){
+  /******** Setup Pin Modes*************/
   
   pinMode(analogPin, INPUT);
   pinMode(strobePin, OUTPUT);
@@ -35,10 +34,7 @@ void setup(){
   pinMode(ledblue, OUTPUT);
   pinMode(ledgreen, OUTPUT);
   
-  digitalWrite(resetPin, HIGH);  //device setup
-  digitalWrite(strobePin, HIGH);
-  
-  normalize();  //calibrate device on setup
+  setupDevices(); //setup Bandpass analyzer
 }
 
 void loop(){
@@ -48,9 +44,9 @@ void loop(){
 
 void updateData(){
   
-  for (int i = 0; i < channelWidth; i++){ // C
+  for (unsigned int i = 0; i < channelWidth; i++){ // C
     digitalWrite(strobePin, LOW);
-    delay(1);
+    delayMicroseconds(100);
     spectrumValue[i] = analogRead(analogPin);
     
     digitalWrite(strobePin, HIGH);
@@ -60,24 +56,34 @@ void updateData(){
 void resetDevice(){
   
   digitalWrite(resetPin, HIGH);
-  delay(5);     
+  delayMicroseconds(150);    //datasheet
   digitalWrite(resetPin, LOW);
+}
+
+void setupDevices(){
+  
+  digitalWrite(resetPin, HIGH);  //Bandpass device setup
+  delayMicroseconds(150);
+  digitalWrite(strobePin, HIGH);
+  
+  normalize();  //calibrate device on setup
+
 }
 
 void normalize(){
   
-  const int sampleDelay = 60;  //sampleDelay * sample ~= 1 second
-  const int samples = 15;      //samples to be taken
-  const int maxOffset = 5;     //value added to max value as signal padding
+  const int sampleDelay = 20;  //sampleDelay * sample ~= 0.5 second
+  const int samples = 20;      //samples to be taken
+  const int buffer = 20;     //value added to max value as signal padding
   
   unsigned int dataBuffering[samples][channelWidth]; //store data from samplings
   
   for (int sampleIndex = 0; sampleIndex < samples; sampleIndex++){ //samples channels for however many samples placed above
   
     resetDevice();
-    updateData(); //7 ms delay each run.
+    updateData(); //150 us delay each run. 2.25 ms total.
     
-    for (int channel = 0; channel < channelWidth; channel ++){ //store values from sample in data array
+    for (unsigned int channel = 0; channel < channelWidth; channel ++){ //store values from sample in data array
       
         dataBuffering[sampleIndex][channel] = spectrumValue[channel];
       }
@@ -87,11 +93,11 @@ void normalize(){
    
     for(int sampleIndex = 0; sampleIndex < samples; sampleIndex ++){ //Now that the data collection is done, we can do math to find the peak values for each channel within that sample duration.
     
-      for(int channel = 0; channel < channelWidth; channel++){
+      for(unsigned int channel = 0; channel < channelWidth; channel++){
         
         if(dataBuffering[sampleIndex][channel] > offset[channel]){  //Find max values in data samples and set offset as max + BUFFER
           
-          offset[channel] = dataBuffering[sampleIndex][channel] + maxOffset;
+          offset[channel] = dataBuffering[sampleIndex][channel] + buffer;
         }
       }
     }
@@ -101,9 +107,9 @@ void normalize(){
 
 void filter(){    //Compares current values to that of the channel offsets to ensure that they are above threshold
 
-  for( int channel = 0; channel < channelWidth; channel++){
+  for( unsigned int channel = 0; channel < channelWidth; channel++){
     
-    if( spectrumValue[channel] >= offset[channel]){
+    if( spectrumValue[channel] >= offset[channel] && spectrumValue[channel] >= avgLevel[channel]){
       
       spectrumValue[channel] = map(spectrumValue[channel], 0,1023,0,255);
     }
@@ -138,21 +144,57 @@ void goodSignal(){ //Light indicator that calibration is complete and music can 
 
 void runMain(){
   
-  setAvgThreshold();
-  
   resetDevice();
   updateData();
-  filter();
+  filter();   
+  
+  if(runCount >= runTimes){
+    
+    setThreshold();
+    runCount = 0;
+  }
+  
   lightAction();
 }
-void setAvgThreshold()
+
+void setThreshold()
 {
+    
+  const int samples = 16;      //samples to be taken ~100ms 
   
+  double dataBuffer[samples][channelWidth]; //store data from samplings to be averaged
+  
+  for (int sampleIndex = 0; sampleIndex < samples; sampleIndex++){ //samples channels for however many samples placed above
+  
+    resetDevice();
+    updateData(); //7 ms delay each run.
+    
+    for (unsigned int channel = 0; channel < channelWidth; channel ++){ //store values from sample in data array
+      
+        dataBuffer[sampleIndex][channel] = spectrumValue[channel];
+      }
+    }
+   
+    for(int sampleIndex = 0; sampleIndex < samples; sampleIndex ++){ //Now that the data collection is done- find the average and store it into 
+    
+      for(unsigned int channel = 0; channel < channelWidth; channel++){
+        
+        avgLevel[channel] += dataBuffer[sampleIndex][channel];
+      }
+    }
+    
+  for (unsigned int channel = 0; channel < channelWidth; channel ++){
+    
+    avgLevel[channel] /= samples;
+  }
 }
+
 void lightAction(){
   
-analogWrite(ledred, spectrumValue[1]);
-analogWrite(ledblue, spectrumValue[3]);
-analogWrite(ledgreen, spectrumValue[5]);
+   for(int i = 0; i < channelWidth; i++)
+    {
+      analogWrite(lightArray[i], spectrumValue[i]);
+    }
+
 }
 

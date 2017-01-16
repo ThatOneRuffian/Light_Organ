@@ -15,13 +15,15 @@ const unsigned short int strobePin = 7;
 const unsigned short int resetPin = 8;
 
 const unsigned short int switchPin = 2;
-const unsigned short int channelWidth = 7;
-const unsigned short int lightArray[7] = {4,9,10,12,13,14,19}; //Pins supporting PWM
+const unsigned short int channelWidth = 3;
+const unsigned short int bandpassWidth = 7;
+
+const unsigned short int lightArray[3] = {14,12,13}; //Pins supporting PWM
 const unsigned short int minTime = 150; // min wait time for bandpass transitions
 
-unsigned int spectrumValue[channelWidth] = {0,0,0,0,0,0,0};  //array that gets written to LEDs 
-unsigned int offset[channelWidth] = {0,0,0,0,0,0,0};         //stores values of first boot noise levels
-unsigned int movingThresholdLevel[channelWidth] = {0,0,0,0,0,0,0};       //stores average channel values. Is updated every x cycles
+unsigned int spectrumValue[bandpassWidth] = {0,0,0,0,0,0,0};  //array that gets written to LEDs 
+unsigned int offset[bandpassWidth] = {0,0,0,0,0,0,0};         //stores values of first boot noise levels
+unsigned int movingThresholdLevel[7] = {0,0,0,0,0,0,0};      //stores average channel values. Is updated every x cycles
 unsigned int runCount = 0; //keep track of runs, so that averages can be taken every x times.
 unsigned int runTimes = 5; //How many samples till re-averaging (1 sample is 700us - update every ~250 ms) 
 
@@ -46,7 +48,7 @@ void loop(){
 
 void updateData(){
   
-  for (unsigned int i = 0; i < channelWidth; i++){ 
+  for (unsigned int i = 0; i < bandpassWidth; i++){ 
     
     digitalWrite(strobePin, LOW);
     delayMicroseconds(minTime);
@@ -77,14 +79,14 @@ void normalize(){
   const int samples = 25;      //samples to be taken
   const int buffer = 20;     //value added to max value as signal padding
   
-  unsigned int dataBuffering[samples][channelWidth]; //store data from samplings
+  unsigned int dataBuffering[samples][bandpassWidth]; //store data from samplings
   
   for (int sampleIndex = 0; sampleIndex < samples; sampleIndex++){ //samples channels for however many samples placed above
   
     resetDevice();
     updateData(); 
     
-    for (unsigned int channel = 0; channel < channelWidth; channel ++){ //store values from sample in data array
+    for (unsigned int channel = 0; channel < bandpassWidth; channel ++){ //store values from sample in data array
       
         dataBuffering[sampleIndex][channel] = spectrumValue[channel];
       }
@@ -94,7 +96,7 @@ void normalize(){
    
     for(int sampleIndex = 0; sampleIndex < samples; sampleIndex ++){ //Now that the data collection is done, we can do math to find the peak values for each channel within that sample duration.
     
-      for(unsigned int channel = 0; channel < channelWidth; channel++){
+      for(unsigned int channel = 0; channel < bandpassWidth; channel++){
         
         if(dataBuffering[sampleIndex][channel] > offset[channel]){  //Find max values in data samples and set offset as max + BUFFER
           
@@ -108,7 +110,7 @@ void normalize(){
 
 void filter(){    //Compares current values to that of the channel offsets to ensure that they are above threshold
 
-  for( unsigned int channel = 0; channel < channelWidth; channel++){
+  for( unsigned int channel = 0; channel < bandpassWidth; channel++){
     
     if( spectrumValue[channel] >= offset[channel] && spectrumValue[channel] >= movingThresholdLevel[channel] ){
       
@@ -187,10 +189,9 @@ void findThreshold()
 }
 
 void lightAction(){
-  
-   for(unsigned int i = 0; i < channelWidth; i++)
-    {
-      analogWrite(lightArray[i], spectrumValue[i]);
-    }
+
+analogWrite(lightArray[0], spectrumValue[1]);
+analogWrite(lightArray[1], spectrumValue[3]);
+analogWrite(lightArray[2], spectrumValue[5]);
 }
 
